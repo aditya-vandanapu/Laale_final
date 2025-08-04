@@ -8,4 +8,5 @@ const client = new CosmosClient(connectionString); // Pass the string directly
 const database = client.database(process.env.COSMOS_DATABASE_NAME || "test1cosmos ");
 const usersContainer = database.container(process.env.COSMOS_USERS_CONTAINER || "Users");
 const questionsContainer = database.container('questions');
-module.exports = { usersContainer ,questionsContainer};
+const topicSurveysContainer = database.container('Topics');
+module.exports = { usersContainer ,questionsContainer,topicSurveysContainer};

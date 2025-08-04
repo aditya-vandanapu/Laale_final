@@ -9,7 +9,7 @@ const bcrypt = require('bcryptjs');
 const { usersContainer } = require('./cosmosdb');
 const { v4: uuidv4 } = require('uuid');
 const { questionsContainer } = require('./cosmosdb'); // NEW LINE
-
+const { topicSurveysContainer } = require('./cosmosdb');
 // Enhanced CORS configuration
 app.use(cors({
   origin: process.env.FRONTEND_URL || 'http://localhost:3000',
@@ -351,7 +351,250 @@ app.get('/api/user-preferences', requireAuth, async (req, res) => {
 app.post('/api/generate-questions', requireAuth, surveyController.generateQuestions);
 app.post('/api/submit-survey', requireAuth, surveyController.generateSubtopics);
 
+// Topic Survey Endpoints
+app.get('/api/verify-topic/:topic', requireAuth, async (req, res) => {
+  try {
+    const { resources } = await topicSurveysContainer.items
+      .query({
+        query: "SELECT TOP 1 * FROM c WHERE c.type = 'learning_topic' AND c.name = @topic",
+        parameters: [{ name: "@topic", value: req.params.topic }]
+      })
+      .fetchAll();
+    
+    res.json({ exists: resources.length > 0 });
+  } catch (err) {
+    res.status(500).json({ success: false, message: "Verification failed" });
+  }
+});
+// Store a new topic
+app.post('/api/store-topic', requireAuth, async (req, res) => {
+  try {
+    const { topic } = req.body;
+    const userId = req.session.user.id;
 
+    // 🔍 Check if topic already exists
+    const { resources } = await topicSurveysContainer.items
+      .query({
+        query: "SELECT TOP 1 * FROM c WHERE c.type = 'learning_topic' AND c.name = @topic AND c.userId = @userId",
+        parameters: [
+          { name: "@topic", value: topic },
+          { name: "@userId", value: userId }
+        ]
+      })
+      .fetchAll();
+
+    let result;
+    if (resources.length === 0) {
+      const item = {
+        id: uuidv4(),
+        type: 'learning_topic',
+        name: topic,
+        userId,
+        createdAt: new Date().toISOString(),
+        subtopics: subtopics || [],
+        answers: answers || [],
+        surveyMeta: surveyMeta || {}
+      };
+
+      const { resource } = await topicSurveysContainer.items.create(item);
+      result = resource;
+    } else {
+      result = resources[0];
+    }
+
+
+    res.json({ 
+      success: true,
+      topic: result
+    });
+
+  } catch (err) {
+    console.error('Failed to store topic:', err.message || err);
+    res.status(500).json({ 
+      success: false,
+      message: 'Failed to store topic'
+    });
+  }
+});
+// Get topic survey questions
+app.get('/api/topic-questions/:topic', requireAuth, async (req, res) => {
+  try {
+    const { topic } = req.params;
+    
+    // This would come from your surveyController
+    const questions = await surveyController.generateQuestions(topic);
+    
+    res.json({
+      success: true,
+      questions
+    });
+  } catch (error) {
+    console.error('Error getting topic questions:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to get topic questions'
+    });
+  }
+});
+
+// Submit topic survey responses
+app.post('/api/submit-topic-survey', requireAuth, async (req, res) => {
+  try {
+    const { topic, answers } = req.body;
+    const userId = req.session.user.id;
+
+    const responseDoc = {
+      id: uuidv4(),
+      type: 'topic_survey_response',
+      topic,
+      answers,
+      userId,
+      submittedAt: new Date().toISOString()
+    };
+
+    await topicSurveysContainer.items.create(responseDoc);
+
+    // Generate subtopics based on survey
+    const subtopics = await surveyController.generateSubtopics(topic, answers);
+
+    res.json({
+      success: true,
+      subtopics
+    });
+  } catch (error) {
+    console.error('Error submitting topic survey:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to submit topic survey'
+    });
+  }
+});
+
+/**
+ * @route POST /api/store-survey-response
+ * @desc Store survey responses in Cosmos DB
+ * @access Private
+ */
+app.post('/api/store-survey-response', requireAuth, async (req, res) => {
+  try {
+    const { topic, answers } = req.body; // Simplified to only need topic and answers
+    const userId = req.session.user.id;
+
+    // Get questions for this topic (from your existing endpoint)
+    const { resources: [topicDoc] } = await topicSurveysContainer.items
+      .query({
+        query: "SELECT * FROM c WHERE c.type = 'learning_topic' AND c.name = @topic AND c.userId = @userId",
+        parameters: [
+          { name: "@topic", value: topic },
+          { name: "@userId", value: userId }
+        ]
+      })
+      .fetchAll();
+
+    if (!topicDoc) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'Topic not found' 
+      });
+    }
+
+    const responseDoc = {
+      id: uuidv4(),
+      type: 'topic_survey_response',
+      topicId: topicDoc.id, // Reference the original topic
+      topic: topicDoc.name,
+      answers,
+      userId,
+      submittedAt: new Date().toISOString()
+    };
+
+    // Store in Topics container (not questionsContainer)
+    const { resource: createdItem } = await topicSurveysContainer.items.create(responseDoc);
+
+    res.json({ 
+      success: true,
+      id: createdItem.id,
+      message: 'Topic survey response stored successfully'
+    });
+  } catch (error) {
+    console.error('Error storing topic survey response:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Failed to store survey response'
+    });
+  }
+});
+
+/**
+ * @route GET /api/user-surveys
+ * @desc Get all surveys for the current user
+ * @access Private
+ */
+app.get('/api/user-surveys', requireAuth, async (req, res) => {
+  try {
+    const userId = req.session.user.id;
+    
+    const { resources: surveys } = await topicSurveysContainer.items
+      .query({
+        query: "SELECT * FROM c WHERE c.userId = @userId AND c.type = 'topic_survey_response' ORDER BY c.submittedAt DESC",
+        parameters: [{ name: "@userId", value: userId }]
+      })
+      .fetchAll();
+
+    res.json({
+      success: true,
+      surveys: surveys.map(survey => ({
+        id: survey.id,
+        topic: survey.topic,
+        submittedAt: survey.submittedAt,
+        answerCount: Object.keys(survey.answers || {}).length
+      }))
+    });
+  } catch (error) {
+    console.error('Error fetching topic surveys:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Failed to fetch surveys'
+    });
+  }
+});
+
+/**
+ * @route GET /api/survey/:id
+ * @desc Get specific survey details
+ * @access Private
+ */
+app.get('/api/survey/:id', requireAuth, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userId = req.session.user.id;
+    
+    const { resource: survey } = await topicSurveysContainer.item(id, id).read();
+
+    if (!survey || survey.userId !== userId || survey.type !== 'topic_survey_response') {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'Survey not found' 
+      });
+    }
+
+    res.json({
+      success: true,
+      survey: {
+        id: survey.id,
+        topic: survey.topic,
+        answers: survey.answers,
+        submittedAt: survey.submittedAt
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching survey:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Failed to fetch survey'
+    });
+  }
+});
 
 // Error handling middleware
 app.use((err, req, res, next) => {

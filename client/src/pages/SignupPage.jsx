@@ -97,12 +97,12 @@ const SignupPage = () => {
           timeout: 10000
         }
       );
-      
-      if (res.data.success) {
+      const data=res.data;
+      if (data.success) {
         // Redirect to login page after successful signup
         navigate('/login', { state: { signupSuccess: true } });
       } else {
-        setError(res.data.message || 'Signup failed. Please try again.');
+        setError(data.message || 'Signup failed. Please try again.');
       }
     } catch (err) {
       let errorMessage = 'Signup service unavailable';

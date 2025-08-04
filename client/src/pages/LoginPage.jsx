@@ -86,13 +86,15 @@ const LoginPage = () => {
           timeout: 10000
         }
       );
-      
-      if (res.data.success) {
+      const data=res.data;
+      if (data.success) {
         //localStorage.setItem('userToken', res.data.token);
         //localStorage.setItem('userEmail', email);
+        localStorage.setItem('userData', JSON.stringify(data));
+        localStorage.setItem('token', data.token);
         navigate('/personalityquestions');
       } else {
-        setError(res.data.message || 'Login failed. Please check your credentials.');
+        setError(data.message || 'Login failed. Please check your credentials.');
       }
     } catch (err) {
       let errorMessage = 'Login service unavailable';
